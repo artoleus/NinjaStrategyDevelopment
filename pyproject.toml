@@ -1,15 +1,12 @@
 [project]
 name = "ninjascript-rag"
 version = "0.1.0"
-description = "RAG system for NinjaScript documentation"
-dependencies = [
-    "scikit-learn>=1.3.0"
-]
+description = "SQLite-based RAG system for NinjaScript documentation"
+dependencies = []
 
 [project.optional-dependencies]
-full = [
-    "sentence-transformers>=2.2.2",
-    "faiss-cpu>=1.7.4"
+dev = [
+    "pytest>=7.0.0"
 ]
 
 [build-system]

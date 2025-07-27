@@ -22,34 +22,35 @@ This directory contains NinjaScript strategy development tools and a comprehensi
 #### Quick Documentation Lookup
 ```bash
 # Get help on any NinjaScript topic
-uv run python claude_rag_integration.py help "creating custom indicators" indicator
+python3 sql_rag_system.py --query "creating custom indicators" --category indicator_development --context
 
 # Search for code examples
-uv run python claude_rag_integration.py examples "OnBarUpdate"
+python3 sql_rag_system.py --query "OnBarUpdate examples" --context
 
 # Get category reference
-uv run python claude_rag_integration.py reference strategy
+python3 sql_rag_system.py --query "strategy" --category strategy_development --context
 ```
 
 #### Direct Database Queries
 ```bash
 # Search documentation with filters
-uv run python query_ninjascript.py "moving average crossover" strategy_development 5
+python3 sql_rag_system.py --query "moving average crossover" --category strategy_development --limit 5
 
 # Get all results for a topic
-uv run python query_ninjascript.py "multi timeframe analysis" 
+python3 sql_rag_system.py --query "multi timeframe analysis" --context
 
 # Category-specific search
-uv run python query_ninjascript.py "custom drawing" graphics_ui
+python3 sql_rag_system.py --query "custom drawing" --category graphics_ui --context
 ```
 
 #### Programmatic Access
 ```python
-from query_ninjascript import query_documentation
+from sql_rag_system import SQLiteRAG
 
 # Get relevant documentation for any NinjaScript topic
-result = query_documentation("strategy lifecycle", "strategy_development", max_results=3)
-context = result["context"]  # Formatted for LLM consumption
+with SQLiteRAG("./ninjascript/deep_docs") as rag:
+    context = rag.get_context("strategy lifecycle", "strategy_development")
+    print(context)  # Formatted for LLM consumption
 ```
 
 ### Available Categories
@@ -71,29 +72,24 @@ context = result["context"]  # Formatted for LLM consumption
 ## 🛠️ Development Tools
 
 ### RAG Database Scripts
-- `rag_database.py` - Core RAG system with vector embeddings
-- `query_ninjascript.py` - Command-line documentation search
-- `claude_rag_integration.py` - Claude Code integration functions
+- `sql_rag_system.py` - SQLite-based documentation search system (lightweight, no dependencies)
 
 ### Installation Requirements
 ```bash
-# SQLite-based system (lightweight, no ML dependencies)
+# No dependencies required - uses Python standard library only
 python3 sql_rag_system.py --rebuild
-
-# Optional: ML-based system with UV
-uv sync
 ```
 
 ### Database Management
 ```bash
-# Build/rebuild the vector database
-uv run python rag_database.py --docs-path ./ninjascript/deep_docs --rebuild
+# Build/rebuild the documentation database
+python3 sql_rag_system.py --rebuild --docs-path ./ninjascript/deep_docs
 
 # View database statistics  
-uv run python rag_database.py --stats
+python3 sql_rag_system.py --stats
 
 # Search with category filter
-uv run python rag_database.py --query "custom indicator" --category indicator_development
+python3 sql_rag_system.py --query "custom indicator" --category indicator_development --context
 ```
 
 ## 🎯 Claude Code Integration
@@ -114,13 +110,12 @@ When developing NinjaScript strategies, Claude Code can automatically access the
 ## 📁 Project Structure
 ```
 ├── CLAUDE.md                     # This file - Claude Code context
-├── rag_database.py              # Core RAG system
-├── query_ninjascript.py         # CLI query interface  
-├── claude_rag_integration.py    # Claude Code integration
-├── CVDDivergenceStrategy.cs     # Example strategy
+├── sql_rag_system.py            # SQLite-based RAG system (lightweight)
+├── CVDDivergenceStrategy.cs     # Enhanced CVD divergence strategy
 ├── ninjascript/
 │   └── deep_docs/               # 62 documentation files (800KB+)
-└── rag_cache/                   # Vector database cache (auto-generated)
+├── ninjascript_docs.db          # SQLite database (auto-generated)
+└── pyproject.toml               # Project configuration
 ```
 
 ## 🚀 Usage Examples
@@ -128,25 +123,25 @@ When developing NinjaScript strategies, Claude Code can automatically access the
 ### For Strategy Development
 ```bash
 # Get strategy development fundamentals
-uv run python claude_rag_integration.py help "strategy development basics" strategy
+python3 sql_rag_system.py --query "strategy development basics" --category strategy_development --context
 
 # Find lifecycle management examples
-uv run python claude_rag_integration.py examples "OnStateChange"
+python3 sql_rag_system.py --query "OnStateChange lifecycle" --context
 
 # Get complete strategy reference
-uv run python claude_rag_integration.py reference strategy_development
+python3 sql_rag_system.py --query "strategy" --category strategy_development --context
 ```
 
 ### For Indicator Development  
 ```bash
 # Learn indicator creation
-uv run python claude_rag_integration.py help "custom indicators" indicator
+python3 sql_rag_system.py --query "custom indicators" --category indicator_development --context
 
 # Find OnBarUpdate patterns
-uv run python claude_rag_integration.py examples "OnBarUpdate"
+python3 sql_rag_system.py --query "OnBarUpdate" --context
 
 # Get graphics and drawing help
-uv run python claude_rag_integration.py help "custom drawing" graphics
+python3 sql_rag_system.py --query "custom drawing" --category graphics_ui --context
 ```
 
 ## 💡 Best Practices
@@ -158,10 +153,10 @@ uv run python claude_rag_integration.py help "custom drawing" graphics
 
 ## 🔧 Maintenance
 
-- **Auto-Update**: RAG database rebuilds when documentation files change
-- **Cache Location**: `./rag_cache/` (embeddings, index, chunks)
-- **Performance**: FAISS indexing for fast semantic search
-- **Memory**: Optimized for 62 files, ~800KB content
+- **Auto-Update**: SQLite database rebuilds when documentation files change
+- **Database Location**: `./ninjascript_docs.db` (SQLite file)
+- **Performance**: SQLite FTS5 for fast full-text search
+- **Memory**: Lightweight - no ML dependencies, ~800KB content indexed
 
 ---
 
