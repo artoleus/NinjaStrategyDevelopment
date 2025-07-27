@@ -101,6 +101,23 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Display(Name="Include Unrealized P&L", Description="Include open position P&L in daily profit calculation", Order=14, GroupName="Profit Management")]
 		public bool IncludeUnrealizedPL { get; set; }
 
+		// Dynamic Position Sizing
+		[NinjaScriptProperty]
+		[Display(Name="Enable Dynamic Sizing", Description="Enable position sizing based on account value", Order=15, GroupName="Position Sizing")]
+		public bool EnableDynamicSizing { get; set; }
+
+		[Range(1, 10000), NinjaScriptProperty]
+		[Display(Name="Base Quantity", Description="Base position size (quantity = 1)", Order=16, GroupName="Position Sizing")]
+		public int BaseQuantity { get; set; }
+
+		[Range(100, 100000), NinjaScriptProperty]
+		[Display(Name="Tier 2 Threshold", Description="Account profit threshold for quantity = 2", Order=17, GroupName="Position Sizing")]
+		public double Tier2Threshold { get; set; }
+
+		[Range(100, 100000), NinjaScriptProperty]
+		[Display(Name="Tier 3 Threshold", Description="Account profit threshold for quantity = 3", Order=18, GroupName="Position Sizing")]
+		public double Tier3Threshold { get; set; }
+
 		#endregion
 
 		#region Private Variables
@@ -151,6 +168,10 @@ namespace NinjaTrader.NinjaScript.Strategies
 		// Thread Safety
 		private readonly object fractalLock = new object();
 		private readonly object tradeLock = new object();
+
+		// Dynamic Position Sizing
+		private double startingAccountValue = 0;
+		private int currentPositionSize = 1;
 
 		#endregion
 
@@ -215,6 +236,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 				DailyLossLimit = 1500;    // £1500 loss limit
 				ResetTime = DateTime.Parse("00:00", System.Globalization.CultureInfo.InvariantCulture);
 				IncludeUnrealizedPL = false;
+
+				// Dynamic Position Sizing defaults
+				EnableDynamicSizing = true;
+				BaseQuantity = 1;
+				Tier2Threshold = 2000;  // $2000 profit for quantity = 2
+				Tier3Threshold = 5000;  // $5000 profit for quantity = 3
 			}
 			else if (State == State.Configure)
 			{
@@ -228,6 +255,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 				// When transitioning to real-time, calculate today's profit so far
 				dailyProfit = CalculateTodaysProfitFromHistory();
 				startOfDayBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar) - dailyProfit;
+
+				// Initialize starting account value for position sizing
+				if (EnableDynamicSizing)
+				{
+					startingAccountValue = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+					currentPositionSize = BaseQuantity;
+					Print($"Dynamic Position Sizing Enabled - Starting Account Value: ${startingAccountValue:F2}");
+				}
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -261,6 +296,13 @@ namespace NinjaTrader.NinjaScript.Strategies
 				totalSignals = 0;
 				winningTrades = 0;
 				losingTrades = 0;
+
+				// Initialize position sizing for backtesting
+				if (EnableDynamicSizing)
+				{
+					startingAccountValue = 100000; // Default for backtesting
+					currentPositionSize = BaseQuantity;
+				}
 			}
 			else if (State == State.Terminated)
 			{
@@ -339,6 +381,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 				// Check for position exits
 				ManagePositions();
+
+				// Update dynamic position sizing
+				if (EnableDynamicSizing)
+				{
+					UpdatePositionSize();
+				}
 			}
 			catch (Exception ex)
 			{
@@ -723,6 +771,94 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 		#endregion
 
+		#region Dynamic Position Sizing
+
+		private void UpdatePositionSize()
+		{
+			try
+			{
+				double currentAccountValue;
+				double accountProfit;
+
+				if (isLiveTrading)
+				{
+					// For live trading, use actual account value
+					currentAccountValue = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+					accountProfit = currentAccountValue - startingAccountValue;
+				}
+				else
+				{
+					// For backtesting, use cumulative strategy profit
+					accountProfit = SystemPerformance.AllTrades.TradesCount > 0 ? 
+						SystemPerformance.AllTrades.Sum(t => t.ProfitCurrency) : 0;
+				}
+
+				int newPositionSize = CalculatePositionSize(accountProfit);
+
+				// Only log when size changes
+				if (newPositionSize != currentPositionSize)
+				{
+					int oldSize = currentPositionSize;
+					currentPositionSize = newPositionSize;
+					Print($"{Time[0]}: Position size changed from {oldSize} to {currentPositionSize} (Account P&L: ${accountProfit:F2})");
+				}
+			}
+			catch (Exception ex)
+			{
+				Print($"UpdatePositionSize Error: {ex.Message}");
+			}
+		}
+
+		private int CalculatePositionSize(double accountProfit)
+		{
+			// Determine position size based on account profit thresholds
+			if (accountProfit >= Tier3Threshold)
+			{
+				return BaseQuantity * 3; // Quantity = 3
+			}
+			else if (accountProfit >= Tier2Threshold)
+			{
+				return BaseQuantity * 2; // Quantity = 2
+			}
+			else
+			{
+				return BaseQuantity * 1; // Quantity = 1
+			}
+		}
+
+		private int GetCurrentPositionSize()
+		{
+			if (EnableDynamicSizing)
+			{
+				// Validate position size is within reasonable bounds
+				int validatedSize = Math.Max(1, Math.Min(currentPositionSize, 10));
+				if (validatedSize != currentPositionSize)
+				{
+					Print($"Position size clamped from {currentPositionSize} to {validatedSize}");
+					currentPositionSize = validatedSize;
+				}
+				return currentPositionSize;
+			}
+			else
+			{
+				return DefaultQuantity;
+			}
+		}
+
+		private void LogPositionSizingStatus()
+		{
+			if (EnableDynamicSizing)
+			{
+				double accountProfit = isLiveTrading ? 
+					Account.Get(AccountItem.CashValue, Currency.UsDollar) - startingAccountValue :
+					(SystemPerformance.AllTrades.TradesCount > 0 ? SystemPerformance.AllTrades.Sum(t => t.ProfitCurrency) : 0);
+
+				Print($"Position Sizing Status: Account P&L=${accountProfit:F2}, Current Size={currentPositionSize}, Tier2=${Tier2Threshold}, Tier3=${Tier3Threshold}");
+			}
+		}
+
+		#endregion
+
 		#region Position Management
 
 		private void EnterLongPosition()
@@ -732,11 +868,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 			double takeProfitPrice = entryPrice + (TakeProfitTicks * TickSize);
 			double stopLossPrice = entryPrice - (StopLossTicks * TickSize);
 
-			EnterLong(DefaultQuantity, "CVD_Long");
+			// Use dynamic position sizing
+			int positionSize = GetCurrentPositionSize();
+			
+			EnterLong(positionSize, "CVD_Long");
 			SetProfitTarget("CVD_Long", CalculationMode.Price, takeProfitPrice);
 			SetStopLoss("CVD_Long", CalculationMode.Price, stopLossPrice, false);
 
-			Print($"Long Entry: Price={entryPrice:F2}, TP={takeProfitPrice:F2}, SL={stopLossPrice:F2}");
+			Print($"Long Entry: Qty={positionSize}, Price={entryPrice:F2}, TP={takeProfitPrice:F2}, SL={stopLossPrice:F2}");
 		}
 
 		private void EnterShortPosition()
@@ -746,11 +885,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 			double takeProfitPrice = entryPrice - (TakeProfitTicks * TickSize);
 			double stopLossPrice = entryPrice + (StopLossTicks * TickSize);
 
-			EnterShort(DefaultQuantity, "CVD_Short");
+			// Use dynamic position sizing
+			int positionSize = GetCurrentPositionSize();
+
+			EnterShort(positionSize, "CVD_Short");
 			SetProfitTarget("CVD_Short", CalculationMode.Price, takeProfitPrice);
 			SetStopLoss("CVD_Short", CalculationMode.Price, stopLossPrice, false);
 
-			Print($"Short Entry: Price={entryPrice:F2}, TP={takeProfitPrice:F2}, SL={stopLossPrice:F2}");
+			Print($"Short Entry: Qty={positionSize}, Price={entryPrice:F2}, TP={takeProfitPrice:F2}, SL={stopLossPrice:F2}");
 		}
 
 		private void ManagePositions()
@@ -900,7 +1042,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 		public override string ToString()
 		{
-			return $"CVD Divergence (TP:{TakeProfitTicks}, SL:{StopLossTicks}, CVD:{CVDPeriod}, Fractals:{FractalPeriods})";
+			string sizingInfo = EnableDynamicSizing ? $", DynSize:{currentPositionSize}" : "";
+			return $"CVD Divergence (TP:{TakeProfitTicks}, SL:{StopLossTicks}, CVD:{CVDPeriod}, Fractals:{FractalPeriods}{sizingInfo})";
 		}
 
 		#endregion
