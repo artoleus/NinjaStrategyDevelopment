@@ -118,6 +118,31 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Display(Name="Tier 3 Threshold", Description="Account profit threshold for quantity = 3", Order=18, GroupName="Position Sizing")]
 		public double Tier3Threshold { get; set; }
 
+		// Progressive Trailing Stop
+		[NinjaScriptProperty]
+		[Display(Name="Enable Trailing Stop", Description="Enable progressive trailing stop management", Order=19, GroupName="Trailing Stop")]
+		public bool EnableTrailingStop { get; set; }
+
+		[Range(10, 90), NinjaScriptProperty]
+		[Display(Name="Breakeven Profit %", Description="Profit percentage to move stop to breakeven", Order=20, GroupName="Trailing Stop")]
+		public double BreakevenProfitPercent { get; set; }
+
+		[Range(10, 95), NinjaScriptProperty]
+		[Display(Name="Trail Level 1 Profit %", Description="Profit percentage for first trailing level", Order=21, GroupName="Trailing Stop")]
+		public double TrailLevel1ProfitPercent { get; set; }
+
+		[Range(10, 80), NinjaScriptProperty]
+		[Display(Name="Trail Level 1 Stop %", Description="Stop percentage for first trailing level", Order=22, GroupName="Trailing Stop")]
+		public double TrailLevel1StopPercent { get; set; }
+
+		[Range(10, 99), NinjaScriptProperty]
+		[Display(Name="Trail Level 2 Profit %", Description="Profit percentage for second trailing level", Order=23, GroupName="Trailing Stop")]
+		public double TrailLevel2ProfitPercent { get; set; }
+
+		[Range(10, 90), NinjaScriptProperty]
+		[Display(Name="Trail Level 2 Stop %", Description="Stop percentage for second trailing level", Order=24, GroupName="Trailing Stop")]
+		public double TrailLevel2StopPercent { get; set; }
+
 		#endregion
 
 		#region Private Variables
@@ -172,6 +197,13 @@ namespace NinjaTrader.NinjaScript.Strategies
 		// Dynamic Position Sizing
 		private double startingAccountValue = 0;
 		private int currentPositionSize = 1;
+
+		// Trailing Stop Management
+		private double entryPrice = 0;
+		private double originalStopPrice = 0;
+		private double currentStopPrice = 0;
+		private int trailingStopLevel = 0; // 0=none, 1=breakeven, 2=level1, 3=level2
+		private MarketPosition lastKnownPosition = MarketPosition.Flat;
 
 		#endregion
 
@@ -242,6 +274,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 				BaseQuantity = 1;
 				Tier2Threshold = 2000;  // $2000 profit for quantity = 2
 				Tier3Threshold = 5000;  // $5000 profit for quantity = 3
+
+				// Trailing Stop defaults
+				EnableTrailingStop = true;
+				BreakevenProfitPercent = 50;   // Move to breakeven at 50% profit
+				TrailLevel1ProfitPercent = 75; // Move to 33% profit at 75% profit
+				TrailLevel1StopPercent = 33;
+				TrailLevel2ProfitPercent = 90; // Move to 50% profit at 90% profit  
+				TrailLevel2StopPercent = 50;
 			}
 			else if (State == State.Configure)
 			{
@@ -340,6 +380,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 					trendEMA = null;
 					cvdEMA = null;
 
+					// Reset trailing stop state
+					ResetTrailingStopState();
+
 					Print($"{Time[0]}: CVD Divergence Strategy resources cleaned up successfully");
 				}
 				catch (Exception ex)
@@ -381,6 +424,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 				// Check for position exits
 				ManagePositions();
+
+				// Manage trailing stops
+				ManageTrailingStop();
 
 				// Update dynamic position sizing
 				if (EnableDynamicSizing)
@@ -859,6 +905,207 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 		#endregion
 
+		#region Trailing Stop Management
+
+		private void ManageTrailingStop()
+		{
+			if (!EnableTrailingStop || Position.MarketPosition == MarketPosition.Flat)
+			{
+				ResetTrailingStopState();
+				return;
+			}
+
+			// Initialize trailing stop on new position
+			if (lastKnownPosition == MarketPosition.Flat && Position.MarketPosition != MarketPosition.Flat)
+			{
+				InitializeTrailingStop();
+			}
+
+			// Update trailing stop levels based on current profit
+			if (Position.MarketPosition != MarketPosition.Flat)
+			{
+				UpdateTrailingStopLevels();
+			}
+
+			lastKnownPosition = Position.MarketPosition;
+		}
+
+		private void InitializeTrailingStop()
+		{
+			entryPrice = Position.AveragePrice;
+			trailingStopLevel = 0;
+
+			// Calculate original stop loss price based on current position
+			if (Position.MarketPosition == MarketPosition.Long)
+			{
+				originalStopPrice = entryPrice - (StopLossTicks * TickSize);
+			}
+			else if (Position.MarketPosition == MarketPosition.Short)
+			{
+				originalStopPrice = entryPrice + (StopLossTicks * TickSize);
+			}
+
+			currentStopPrice = originalStopPrice;
+
+			Print($"Trailing Stop Initialized: Entry={entryPrice:F2}, Original Stop={originalStopPrice:F2}, Position={Position.MarketPosition}");
+		}
+
+		private void UpdateTrailingStopLevels()
+		{
+			double currentPrice = Close[0];
+			double unrealizedPnL = Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, currentPrice);
+			double maxPossibleProfit = CalculateMaxPossibleProfit();
+			
+			if (maxPossibleProfit <= 0) return; // Avoid division by zero
+
+			double profitPercentage = (unrealizedPnL / maxPossibleProfit) * 100;
+
+			// Determine which trailing level we should be at
+			int targetLevel = DetermineTrailingLevel(profitPercentage);
+
+			// Only move stops forward, never backward
+			if (targetLevel > trailingStopLevel)
+			{
+				double newStopPrice = CalculateTrailingStopPrice(targetLevel);
+				
+				// Validate stop is moving in the right direction
+				if (IsValidStopMovement(newStopPrice))
+				{
+					UpdateStopLoss(newStopPrice, targetLevel);
+				}
+			}
+		}
+
+		private double CalculateMaxPossibleProfit()
+		{
+			double maxProfit = 0;
+
+			if (Position.MarketPosition == MarketPosition.Long)
+			{
+				// Max profit = (TP price - Entry price) * Quantity * Point Value  
+				double tpPrice = entryPrice + (TakeProfitTicks * TickSize);
+				maxProfit = (tpPrice - entryPrice) * Position.Quantity * Instrument.MasterInstrument.PointValue;
+			}
+			else if (Position.MarketPosition == MarketPosition.Short)
+			{
+				// Max profit = (Entry price - TP price) * Quantity * Point Value
+				double tpPrice = entryPrice - (TakeProfitTicks * TickSize);
+				maxProfit = (entryPrice - tpPrice) * Position.Quantity * Instrument.MasterInstrument.PointValue;
+			}
+
+			return maxProfit;
+		}
+
+		private int DetermineTrailingLevel(double profitPercentage)
+		{
+			if (profitPercentage >= TrailLevel2ProfitPercent)
+				return 3; // Level 2 trailing
+			else if (profitPercentage >= TrailLevel1ProfitPercent)  
+				return 2; // Level 1 trailing
+			else if (profitPercentage >= BreakevenProfitPercent)
+				return 1; // Breakeven
+			else
+				return 0; // Original stop
+		}
+
+		private double CalculateTrailingStopPrice(int level)
+		{
+			double newStopPrice = originalStopPrice;
+
+			switch (level)
+			{
+				case 1: // Breakeven
+					newStopPrice = entryPrice;
+					break;
+
+				case 2: // Trail Level 1 (33% of profit)
+					newStopPrice = CalculatePartialProfitStop(TrailLevel1StopPercent);
+					break;
+
+				case 3: // Trail Level 2 (50% of profit)
+					newStopPrice = CalculatePartialProfitStop(TrailLevel2StopPercent);
+					break;
+			}
+
+			return newStopPrice;
+		}
+
+		private double CalculatePartialProfitStop(double profitPercent)
+		{
+			double fullProfitDistance = TakeProfitTicks * TickSize;
+			double partialProfitDistance = fullProfitDistance * (profitPercent / 100.0);
+
+			if (Position.MarketPosition == MarketPosition.Long)
+			{
+				return entryPrice + partialProfitDistance;
+			}
+			else // Short position
+			{
+				return entryPrice - partialProfitDistance;
+			}
+		}
+
+		private bool IsValidStopMovement(double newStopPrice)
+		{
+			if (Position.MarketPosition == MarketPosition.Long)
+			{
+				// For long positions, stop should move up (be higher than current stop)
+				return newStopPrice > currentStopPrice;
+			}
+			else if (Position.MarketPosition == MarketPosition.Short)
+			{
+				// For short positions, stop should move down (be lower than current stop)  
+				return newStopPrice < currentStopPrice;
+			}
+
+			return false;
+		}
+
+		private void UpdateStopLoss(double newStopPrice, int newLevel)
+		{
+			try
+			{
+				string exitName = Position.MarketPosition == MarketPosition.Long ? "CVD_Long" : "CVD_Short";
+				SetStopLoss(exitName, CalculationMode.Price, newStopPrice, false);
+
+				string levelName = GetTrailingLevelName(newLevel);
+				Print($"Trailing Stop Updated to {levelName}: New Stop={newStopPrice:F2} (was {currentStopPrice:F2})");
+
+				currentStopPrice = newStopPrice;
+				trailingStopLevel = newLevel;
+			}
+			catch (Exception ex)
+			{
+				Print($"Error updating trailing stop: {ex.Message}");
+			}
+		}
+
+		private string GetTrailingLevelName(int level)
+		{
+			switch (level)
+			{
+				case 1: return "Breakeven";
+				case 2: return $"Trail L1 ({TrailLevel1StopPercent}%)";
+				case 3: return $"Trail L2 ({TrailLevel2StopPercent}%)";
+				default: return "Original";
+			}
+		}
+
+		private void ResetTrailingStopState()
+		{
+			if (trailingStopLevel > 0) // Only log if we had an active trailing stop
+			{
+				Print("Trailing Stop Reset - Position Closed");
+			}
+
+			entryPrice = 0;
+			originalStopPrice = 0;
+			currentStopPrice = 0;
+			trailingStopLevel = 0;
+		}
+
+		#endregion
+
 		#region Position Management
 
 		private void EnterLongPosition()
@@ -1043,7 +1290,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 		public override string ToString()
 		{
 			string sizingInfo = EnableDynamicSizing ? $", DynSize:{currentPositionSize}" : "";
-			return $"CVD Divergence (TP:{TakeProfitTicks}, SL:{StopLossTicks}, CVD:{CVDPeriod}, Fractals:{FractalPeriods}{sizingInfo})";
+			string trailingInfo = EnableTrailingStop ? $", Trail:{GetTrailingLevelName(trailingStopLevel)}" : "";
+			return $"CVD Divergence (TP:{TakeProfitTicks}, SL:{StopLossTicks}, CVD:{CVDPeriod}, Fractals:{FractalPeriods}{sizingInfo}{trailingInfo})";
 		}
 
 		#endregion
