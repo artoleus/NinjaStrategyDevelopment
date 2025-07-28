@@ -964,15 +964,20 @@ namespace NinjaTrader.NinjaScript.Strategies
 			// Determine which trailing level we should be at
 			int targetLevel = DetermineTrailingLevel(profitPercentage);
 
-			// Only move stops forward, never backward
-			if (targetLevel > trailingStopLevel)
+			// Always resubmit trailing stop order (exit orders need to be resubmitted each bar)
+			if (targetLevel > 0)
 			{
 				double newStopPrice = CalculateTrailingStopPrice(targetLevel);
 				
-				// Validate stop is moving in the right direction
-				if (IsValidStopMovement(newStopPrice))
+				// Validate stop is moving in the right direction (or maintaining current level)
+				if (targetLevel >= trailingStopLevel && IsValidStopMovement(newStopPrice))
 				{
 					UpdateStopLoss(newStopPrice, targetLevel);
+				}
+				else if (targetLevel == trailingStopLevel && trailingStopLevel > 0)
+				{
+					// Maintain current trailing stop level by resubmitting
+					UpdateStopLoss(currentStopPrice, trailingStopLevel);
 				}
 			}
 		}
@@ -1050,13 +1055,13 @@ namespace NinjaTrader.NinjaScript.Strategies
 		{
 			if (Position.MarketPosition == MarketPosition.Long)
 			{
-				// For long positions, stop should move up (be higher than current stop)
-				return newStopPrice > currentStopPrice;
+				// For long positions, stop should move up or stay the same (be higher than or equal to current stop)
+				return newStopPrice >= currentStopPrice;
 			}
 			else if (Position.MarketPosition == MarketPosition.Short)
 			{
-				// For short positions, stop should move down (be lower than current stop)  
-				return newStopPrice < currentStopPrice;
+				// For short positions, stop should move down or stay the same (be lower than or equal to current stop)  
+				return newStopPrice <= currentStopPrice;
 			}
 
 			return false;
@@ -1066,8 +1071,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 		{
 			try
 			{
-				string exitName = Position.MarketPosition == MarketPosition.Long ? "CVD_Long" : "CVD_Short";
-				SetStopLoss(exitName, CalculationMode.Price, newStopPrice, false);
+				// Use explicit exit orders instead of SetStopLoss to avoid managed approach limitations
+				if (Position.MarketPosition == MarketPosition.Long)
+				{
+					ExitLongStopMarket(newStopPrice, "TrailingStop", "CVD_Long");
+				}
+				else if (Position.MarketPosition == MarketPosition.Short)
+				{
+					ExitShortStopMarket(newStopPrice, "TrailingStop", "CVD_Short");
+				}
 
 				string levelName = GetTrailingLevelName(newLevel);
 				Print($"Trailing Stop Updated to {levelName}: New Stop={newStopPrice:F2} (was {currentStopPrice:F2})");
