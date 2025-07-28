@@ -26,7 +26,7 @@ using NinjaTrader.NinjaScript.DrawingTools;
 namespace NinjaTrader.NinjaScript.Strategies
 {
 	/// <summary>
-	/// CVD Divergence Strategy - Translated from Python/Pine Script
+	/// CVD Trailing Strategy - Enhanced version with trailing stops
 	///
 	/// This strategy identifies bullish and bearish divergences between price fractals
 	/// and Cumulative Volume Delta (CVD) to generate trading signals.
@@ -36,9 +36,10 @@ namespace NinjaTrader.NinjaScript.Strategies
 	/// - Fractal detection with trend filtering
 	/// - Divergence detection with confirmation
 	/// - Time-based session filtering
-	/// - Risk management with TP/SL
+	/// - Dynamic position sizing based on account performance
+	/// - Progressive trailing stops (50%→BE, 75%→33%, 90%→50%)
 	/// </summary>
-	public class CVDDivergenceStrategy : Strategy
+	public class CVDTrailingStrategy : Strategy
 	{
 		#region Strategy Parameters
 
