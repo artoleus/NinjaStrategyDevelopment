@@ -234,8 +234,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 		{
 			if (State == State.SetDefaults)
 			{
-				Description = @"CVD Divergence Strategy - Identifies price/CVD divergences for trading signals";
-				Name = "CVDDivergenceStrategy";
+				Description = @"CVD Trailing Strategy - Enhanced with progressive trailing stops";
+				Name = "CVDTrailingStrategy";
 				Calculate = Calculate.OnBarClose;
 				EntriesPerDirection = 1;
 				EntryHandling = EntryHandling.AllEntries;
@@ -384,7 +384,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 					// Reset trailing stop state
 					ResetTrailingStopState();
 
-					Print($"{Time[0]}: CVD Divergence Strategy resources cleaned up successfully");
+					Print($"{Time[0]}: CVD Trailing Strategy resources cleaned up successfully");
 				}
 				catch (Exception ex)
 				{
@@ -888,7 +888,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 			}
 			else
 			{
-				return DefaultQuantity;
+				return BaseQuantity;
 			}
 		}
 
@@ -1292,7 +1292,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 		{
 			string sizingInfo = EnableDynamicSizing ? $", DynSize:{currentPositionSize}" : "";
 			string trailingInfo = EnableTrailingStop ? $", Trail:{GetTrailingLevelName(trailingStopLevel)}" : "";
-			return $"CVD Divergence (TP:{TakeProfitTicks}, SL:{StopLossTicks}, CVD:{CVDPeriod}, Fractals:{FractalPeriods}{sizingInfo}{trailingInfo})";
+			return $"CVD Trailing (TP:{TakeProfitTicks}, SL:{StopLossTicks}, CVD:{CVDPeriod}, Fractals:{FractalPeriods}{sizingInfo}{trailingInfo})";
 		}
 
 		#endregion
